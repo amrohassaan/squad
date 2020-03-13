@@ -331,6 +331,7 @@ class LatestTestResults(object):
 
 
 class LatestTestResultsSerializer(serializers.BaseSerializer):
+
     def to_representation(self, obj):
         test_name = self.context.get('test_name')
         latest_result = LatestTestResults(obj, test_name)
@@ -787,29 +788,58 @@ class EnvironmentViewSet(ModelViewSet):
 
 
 class HyperlinkedMetricsIdentityField(serializers.HyperlinkedIdentityField):
+
     def get_url(self, *args):
         testrun = args[0]
         statuses = testrun.status.all()
         if len(statuses) > 0:
-            if testrun.status.all()[0].has_metrics:
-                return super().get_url(*args)
+            for s in statuses:
+                if not s.suite_id and s.has_metrics:
+                    return super().get_url(*args)
+                else:
+                    return None
         else:
             return None
 
 
 class HyperlinkedTestsIdentityField(serializers.HyperlinkedIdentityField):
+
     def get_url(self, *args):
         testrun = args[0]
         statuses = testrun.status.all()
         if len(statuses) > 0:
-            tr_status = testrun.status.all()[0]
-            num_tests = (
-                tr_status.tests_pass + tr_status.tests_fail + tr_status.tests_skip + tr_status.tests_xfail
-            )
-            if num_tests > 0:
-                return super().get_url(*args)
+            for s in statuses:
+                if not s.suite_id:
+                    num_tests = (s.tests_pass + s.tests_fail + s.tests_skip + s.tests_xfail)
+                    if num_tests > 0:
+                        return super().get_url(*args)
+                    else:
+                        return None
         else:
             return None
+
+
+class StatusFilteredListSerializer(serializers.ListSerializer):
+
+    def to_representation(self, data):
+        params = self.context.get('request').query_params
+        suite = params.get('suite', None)
+        if suite:
+            try:
+                suite = int(suite)
+                data = [status for status in data if status.suite_id == suite] or data
+            except ValueError as e:
+                logger.warning(e)
+        return super(StatusFilteredListSerializer, self).to_representation(data)
+
+
+class StatusSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        list_serializer_class = StatusFilteredListSerializer
+        model = Status
+        exclude = ('test_run',)
+        ordering = ['-id']
 
 
 class TestRunSerializer(serializers.HyperlinkedModelSerializer):
@@ -821,6 +851,7 @@ class TestRunSerializer(serializers.HyperlinkedModelSerializer):
     log_file = serializers.HyperlinkedIdentityField(view_name='testrun-log-file')
     tests = HyperlinkedTestsIdentityField(view_name='testrun-tests')
     metrics = HyperlinkedMetricsIdentityField(view_name='testrun-metrics')
+    status = serializers.HyperlinkedIdentityField(view_name='testrun-status')
 
     class Meta:
         model = TestRun
@@ -898,9 +929,7 @@ class TestRunViewSet(ModelViewSet):
     Only test runs from public projects and from projects accessible to you are
     available.
     """
-    queryset = TestRun.objects.prefetch_related(
-        Prefetch("status", queryset=Status.objects.filter(suite=None))
-    ).order_by("-id")
+    queryset = TestRun.objects.prefetch_related("status").order_by("-id")
     project_lookup_key = 'build__project__in'
     serializer_class = TestRunSerializer
     filterset_fields = (
@@ -910,6 +939,7 @@ class TestRunViewSet(ModelViewSet):
         "data_processed",
         "status_recorded",
         "environment",
+        "status",
     )
     filter_fields = filterset_fields  # TODO: remove when django-filters 1.x is not supported anymore
     filterset_class = TestRunFilter
@@ -955,6 +985,14 @@ class TestRunViewSet(ModelViewSet):
         paginator = PageNumberPagination()
         page = paginator.paginate_queryset(metrics, request)
         serializer = MetricSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
+
+    @action(detail=True, methods=['get'], suffix='status')
+    def status(self, request, pk=None):
+        statuses = self.get_object().status.all()
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(statuses, request)
+        serializer = StatusSerializer(page, many=True, context={'request': request})
         return paginator.get_paginated_response(serializer.data)
 
 
