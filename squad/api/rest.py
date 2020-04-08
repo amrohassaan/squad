@@ -31,6 +31,9 @@ from squad.ci.models import Backend, TestJob
 from django.http import HttpResponse
 from django.urls import reverse
 from django import forms
+from rest_framework_extensions.routers import ExtendedDefaultRouter
+from rest_framework_extensions.fields import ResourceUriField
+from rest_framework_extensions.mixins import NestedViewSetMixin
 from rest_framework import routers, serializers, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
@@ -247,7 +250,7 @@ class API(routers.APIRootView):
         return "API"
 
 
-class APIRouter(routers.DefaultRouter):
+class APIRouter(ExtendedDefaultRouter):
 
     APIRootView = API
 
@@ -819,27 +822,41 @@ class HyperlinkedTestsIdentityField(serializers.HyperlinkedIdentityField):
             return None
 
 
-class StatusFilteredListSerializer(serializers.ListSerializer):
+class StatusFilter(filters.FilterSet):
 
-    def to_representation(self, data):
-        params = self.context.get('request').query_params
-        suite = params.get('suite', None)
-        if suite:
-            try:
-                suite = int(suite)
-                data = [status for status in data if status.suite_id == suite] or data
-            except ValueError as e:
-                logger.warning(e)
-        return super(StatusFilteredListSerializer, self).to_representation(data)
+    class Meta:
+        model = Status
+        fields = {'suite': ['exact', 'isnull'],
+                  'metrics_summary': ['gt', 'lt'],
+                  'tests_pass': ['gt', 'lt'],
+                  'tests_fail': ['gt', 'lt'],
+                  'tests_xfail': ['gt', 'lt'],
+                  'tests_skip': ['gt', 'lt'],
+                  'has_metrics': ['exact'],
+                  }
 
+
+#class StatusResourceUriField(ResourceUriField):
+#
+#    def get_url(self, obj, view_name, request, format_):
+#        url_keywords = {'parent_lookup_test_run_id': obj.test_run_id, 'pk': obj.pk}
+#        return rest_reverse(view_name, kwargs=url_keywords, request=request, format=format_)
+#
 
 class StatusSerializer(serializers.ModelSerializer):
 
+    #resource_uri = StatusResourceUriField(view_name='testrun-status', read_only=True)
+
     class Meta:
-        list_serializer_class = StatusFilteredListSerializer
         model = Status
         exclude = ('test_run',)
-        ordering = ['-id']
+
+
+class StatusViewSet(NestedViewSetMixin, viewsets.ReadOnlyModelViewSet):
+
+    queryset = Status.objects
+    serializer_class = StatusSerializer
+    filterset_class = StatusFilter
 
 
 class TestRunSerializer(serializers.HyperlinkedModelSerializer):
@@ -851,7 +868,6 @@ class TestRunSerializer(serializers.HyperlinkedModelSerializer):
     log_file = serializers.HyperlinkedIdentityField(view_name='testrun-log-file')
     tests = HyperlinkedTestsIdentityField(view_name='testrun-tests')
     metrics = HyperlinkedMetricsIdentityField(view_name='testrun-metrics')
-    status = serializers.HyperlinkedIdentityField(view_name='testrun-status')
 
     class Meta:
         model = TestRun
@@ -987,7 +1003,7 @@ class TestRunViewSet(ModelViewSet):
         serializer = MetricSerializer(page, many=True, context={'request': request})
         return paginator.get_paginated_response(serializer.data)
 
-    @action(detail=True, methods=['get'], suffix='status')
+    @action(detail=False, methods=['get'], suffix='status')
     def status(self, request, pk=None):
         statuses = self.get_object().status.all()
         paginator = PageNumberPagination()
@@ -1150,7 +1166,12 @@ router.register(r'groups', GroupViewSet)
 router.register(r'projects', ProjectViewSet)
 router.register(r'builds', BuildViewSet)
 router.register(r'testjobs', TestJobViewSet)
-router.register(r'testruns', TestRunViewSet)
+router.register(r'testruns', TestRunViewSet).register(
+    r'status',
+    StatusViewSet,
+    basename='testrun-status',
+    parents_query_lookups=['test_run_id'],
+)
 router.register(r'tests', TestViewSet)
 router.register(r'suites', SuiteViewSet)
 router.register(r'environments', EnvironmentViewSet)
