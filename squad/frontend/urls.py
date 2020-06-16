@@ -12,7 +12,7 @@ from . import project_settings
 from . import user_settings
 from . import build_settings
 from squad.core.models import slug_pattern, group_slug_pattern
-
+from .tests import LegacyTestHistoryView
 
 group_and_project = (group_slug_pattern, slug_pattern)
 
@@ -31,6 +31,7 @@ urlpatterns = [
     url(r'^(%s)/(%s)/$' % group_and_project, views.project_home, name='project'),
     url(r'^(%s)/(%s)/settings/' % group_and_project, include(project_settings.urls)),
     url(r'^(%s)/(%s)/thresholds/' % group_and_project, project_settings.thresholds_legacy),
+    url(r'^(%s)/(%s)/tests/(.+)$' % group_and_project, LegacyTestHistoryView.as_view()),
     url(r'^(%s)/(%s)/badge$' % group_and_project, views.project_badge, name='project_badge'),
     url(r'^(%s)/(%s)/metrics/$' % group_and_project, views.metrics, name='metrics'),
     url(r'^(%s)/(%s)/builds/$' % group_and_project, views.builds, name='builds'),

@@ -3,9 +3,11 @@ import json
 from django.db.models import Prefetch
 from django.shortcuts import render, get_object_or_404
 from django.http import Http404
+from django.views.generic.base import RedirectView
+from django.urls import reverse
 
 from squad.http import auth
-from squad.core.models import Test, Suite, TestRun
+from squad.core.models import Test, Suite, TestRun, Project
 from squad.core.history import TestHistory
 from squad.core.utils import split_list
 from squad.frontend.views import get_build
@@ -167,6 +169,18 @@ def tests(request, group_slug, project_slug, build_version):
     }
 
     return render(request, 'squad/tests.jinja2', context)
+
+
+class LegacyTestHistoryView(RedirectView):
+    permanent = True
+
+    def get_redirect_url(self, *args, **kwargs):
+        group_slug, project_slug, full_testname = args
+        suite_slug, test_name = full_testname.rsplit("/", 1)
+        project = Project.objects.filter(slug=project_slug, group__slug=group_slug).last()
+        test = Test.objects.filter(name=test_name, suite__slug=suite_slug, test_run__build__project=project).prefetch_related(
+            'test_run', 'test_run__build').order_by('test_run__build__datetime').last()
+        return reverse('test_history', args=[group_slug, project_slug, test.test_run.build.version, test.test_run.id, suite_slug, test_name])
 
 
 @auth
